@@ -1,30 +1,575 @@
 ---
-title: "Untitled"
+title: "Задание на обработĸу данных для Аналитиĸа ЭКОПСИ"
 author: "Макаров В.Ю."
-date: "2023-06-01"
-output: html_document
+date: "2023-05-20"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r eval=FALSE, include=FALSE}
+install.packages("stringr")
+install.packages("nortest")
+install.packages("dplyr")
+install.packages("patchwork")
+install.packages("devtools")
+devtools::install_github("kupietz/kableExtra")
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r include=FALSE}
+library(data.table)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(patchwork)
+library(nortest)
+library(kableExtra)
 ```
 
-## Including Plots
+## Часть 1: Техничесĸая
 
-You can also embed plots, for example:
+### 1.1 Загрузĸа данных
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+Загрузите данные из всех CSV в один dataframe (или tibble / data.table).
+
+**Вопросы:**
+
+1.  Каĸое ĸоличество строĸ в загруженном dataframe?
+
+2.  Каĸое ĸоличество столбцов в загруженном dataframe?
+
+```{r}
+# Создание пустого dataframe
+all_data <- data.table()
+
+# Перебор файлов и загрузка данных
+file_path <- "data/"  # Путь к папке с CSV файлами
+file_names <- list.files(file_path, pattern = "*.csv", full.names = TRUE)
+
+for (file_name in file_names) {
+  all_data <- rbind(all_data, fread(file_name, sep = ";", dec = ",", encoding = "UTF-8"))
+}
+
+# Полсчитываем количесвто строк и столбцов
+rows_count <- nrow(all_data)
+cols_count <- ncol(all_data)
+
+# Выводим данные
+message("Количество строк в датафрейме: ", rows_count, '\nКоличесвто столбцов в датафрэйме: ', cols_count)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+### 1.2 Очистĸа данных
+
+Данные пришли со следующией дополнительной информацией: Строĸи файлов могли случайным образом дублироваться
+
+В taster_name иногда вместо латинсĸих "a", "o", "e" встречаются их ĸирриличесĸие эĸвиваленты. Неизвестно на ĸаĸих этапах подготовĸи данных происходили эти ошибĸи, сĸольĸо раз это происходило и в ĸаĸой очередности. Очистите данные от перечисленных ошибоĸ.
+
+**Вопросы:**
+
+1.  Каĸое ĸоличество строĸ в очищенном dataframe?
+
+2.  Каĸое ĸоличество униĸальных значений содержится в taster_name (вĸл. NA)
+
+```{r}
+# Удаление дубликатов строк на основе столбца "id"
+all_data_clean <- all_data %>%
+  filter(!duplicated(all_data$entry_id))
+
+# Замена кириллических символов в taster_name на латинские эквиваленты
+all_data_clean$taster_name <- gsub("а", "a", all_data_clean$taster_name)
+all_data_clean$taster_name <- gsub("о", "o", all_data_clean$taster_name)
+all_data_clean$taster_name <- gsub("е", "e", all_data_clean$taster_name)
+
+rows_count_clean <- nrow(all_data_clean)
+message("Количество строк в очищенном dataframe: ", rows_count_clean)
+```
+
+```{r}
+# Количество уникальных значений в столбце taster_name, включая NA
+unique_count_taster <- all_data_clean %>%
+  summarize(unique_count_taster = n_distinct(taster_name, na.rm = FALSE)) %>%
+  pull(unique_count_taster)
+
+# Вывод результата
+message("Количество униĸальных значений в taster_name (вĸл. NA): ", unique_count_taster)
+```
+
+### 1.3 Эĸсплораторный анализ
+
+Прежде чем переходить ĸ анализу, нужно немного познаĸомиться с данными. Ответьте на несĸольĸо вопросов о данных, используя очищенный dataframe.
+
+**Задания:**
+
+1.  Для переменных points и price приведите набор описательных статистик:
+
+    -   Среднее
+    -   Медиана
+    -   Стандартное отĸлонение
+
+2.  Опишите связь между points и price
+
+    -   Уĸажите ĸоэффициент ĸорреляции и p value.
+
+    -   Уĸажите, ĸаĸой ĸоэффициент вы использовали и почему.
+
+    -   Если перед расчётом ĸоэффициента вы трансформировали переменные - опишите эти трансформации и их причины.
+
+#### 1.3.1. Описательная статистика
+
+##### 1.3.1.1. Пропущенные данные
+
+Посмотрим, есть ли пропущенные данные:
+
+```{r}
+# Подсчет пропущенных значений по колонкам
+missing_values <- data.frame(colSums(is.na(all_data_clean)))
+
+colnames(missing_values) <- "missing_value"
+missing_values <- t(missing_values)
+# Выводим результат
+missing_values %>%
+  kable(caption = "Количество пропущенных значений по столбцам")%>%
+  kable_paper(bootstrap_options = "striped", full_width = F)
+```
+
+Посмотрим сколько уникальных данных содержится в каждой колонке:
+
+```{r}
+# Подсчет уникальных значений с учетом пропущенных значений
+unique_counts <- all_data_clean %>%
+  summarise(across(everything(), ~n_distinct(., na.rm = FALSE)))
+
+# Выводим результат
+unique_counts %>%
+  kable(caption = "Количество уникальных значений по столбцам")%>%
+  kable_paper(bootstrap_options = "striped", full_width = F)
+```
+
+Для получения описательной статистики для данных, которые содержат пропущенные значения, мы можем использовать функцию **`describe`** в сочетании с функцией **`na.rm = TRUE`** для игнорирования пропущенных значений.
+
+Заполнить пропущенные значения средним значением по колонке **`price`**. Либо построить модель и на основании ее спрогнозировать цену. Получить данные из других источников.
+
+Посчитаем, какой процент данных пропущен, а также выведем **`max`** и **`min`**:
+
+```{r}
+# Подсчет процента пропущенных данных
+missing_percent <- sum(is.na(all_data_clean$price)) / nrow(all_data_clean) * 100
+
+
+# Подсчет min и max
+max_price <- max(all_data_clean$price, na.rm = TRUE)
+min_price <- min(all_data_clean$price, na.rm = TRUE)
+
+message('Кол-во пропущенных значений - ', round(missing_percent, 2), '%; максимальная цена - ', max_price, '; минимальная цена - ', min_price)
+
+```
+
+7% достаточно высокий процент. Для заполнения пропущенных данных в колонке `price`, опредлим распределение данных, проверим наличие линейных связей между числовыми переменными, а также посмотрим на зависимость между числовыми и остальными переменными. Но для начало исправим пропущенное значение `varety`. Для этого посмотрим более подробно на эти данные:
+
+```{r fig.width=3}
+variety_isna <- subset(all_data_clean, is.na(variety))
+variety_isna %>%
+  kable(caption = "Данные о пропущенном сорте винограда")%>%
+  kable_paper(bootstrap_options = "striped", full_width = F)
+
+```
+
+И если прочиать описание, то мы увидим, что там указан сорт винограда **Petite Syrah**. При попытки поиска токого сорта винограда в данных ничего не удалось найти. Однако при частичном запросе можно увидеть, что в данных используется другая запись **Petite Sirah**. **"Petite Syrah"** и **"Petite Sirah"** - это два разных названия для одного и того же сорта винограда. Различие в написании происходит из-за исторических и региональных различий.
+
+В Соединенных Штатах и некоторых других странах, таких как Австралия и Южная Африка, используется название "Petite Sirah". Это название было популяризировано в этих регионах и стало устоявшимся.
+
+В то же время, во Франции и некоторых других странах, сорт винограда называется "Petite Syrah". Это связано с историческими и лингвистическими особенностями названия виноградной сортовой группы Syrah во Франции.
+
+Важно отметить, что независимо от названия, сорт винограда "Petite Syrah" или "Petite Sirah" обозначает один и тот же сорт, который характеризуется своими темными и насыщенными ароматами и высоким содержанием танинов.
+
+Чтобы в дальнейшем проще было использовать данные, заменим пропущенное значение названием **"Petite Sirah"**:
+
+```{r}
+all_data_clean$variety[is.na(all_data_clean$variety)] <- "Petite Sirah"
+```
+
+При первоночальном просмотре данных я заметил, что в колонке `title` содержиться строка, которая состоит из `winery` + год купажа + `designation` + `variety` + `province` или `region`. Однако заполнить все пропущенные данные все равно не удастся, так как в данных у которых неуказаны данные эти данные также отсуствуют в записи `title`. Единственным, что мы можем это извлечь из данных год купажа. Также необходимо сразу учеть, что в некоторых данных вместо года купажа указано NV. Что означает "Non-Vintage". Добавим колонку в данные `Year`:
+
+```{r}
+# Добавление колонки "Year" и заполнение значениями "NA"
+all_data_clean$Year <- NA
+
+# Извлечение всех четырехзначных чисел из колонки "title"
+pattern <- "\\d{4}"
+year_extracted <- str_extract(all_data_clean$title, pattern)
+
+# Поиск года купажа в полученных числах
+extracted_numeric <- as.numeric(year_extracted)
+valid_indices <- !is.na(extracted_numeric) & extracted_numeric >= 1950 & extracted_numeric <= 2050
+
+# Заполнение колонки "Year" значениями года купажа или "Non-Vintage"
+all_data_clean$Year[valid_indices] <- extracted_numeric[valid_indices]
+
+# Преобразуем формат даты в число
+all_data_clean$Year <- as.numeric(all_data_clean$Year)
+```
+
+Посмотрим на наличие линейной связи между числовыми перемеными:
+
+```{r}
+# Построение диаграммы рассеяния с помощью pairs()
+pairs(all_data_clean[, c("price", "points", "Year")])
+
+```
+
+Исходя из данных мы наблюдаем отсуствие линейных связей между числовыми данными. Анализируя графики зависимости цены от числовых значений, можно заметить зависимость `price` от `points`. Для того, чтобы это подемнострировать более наглядно, мы преобразуем данные `points` в фактор и псотроим график `boxplot`.
+
+```{r}
+# Создание графика
+boxplot_point_price <- ggplot(all_data_clean, aes(x = factor(points), y = price)) +
+  geom_boxplot() +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4, color = "red") +
+  xlab("Points") +
+  ylab("Price") +
+  ggtitle("Boxplot of Price by Points with Mean")
+boxplot_point_price
+```
+
+Тут зависимость показана более наглядно, однако наличие многоих выбросов мешает нам посмотреть более подробно, поэтому для начала ограничим шкалу price на графике до 450
+
+```{r}
+# Создание графика с ограничением по оси Y
+boxplot_point_price_lim <- ggplot(all_data_clean, aes(x = factor(points), y = price)) +
+  geom_boxplot() +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4, color = "red") +
+  xlab("Points") +
+  ylab("Price") +
+  ggtitle("Boxplot of Price by Points with Mean")+
+  ylim(0, 450)
+
+boxplot_point_price_lim
+```
+
+Исходя из графика мы видим, чем больше баллов получило вино, тем выше значение медианы и среднего значения. Заменим пропущенное значение `price` средним значением +-стандартное отклонение в зависимости от баллов:
+
+```{r}
+# Вычисление среднего значения и стандартного отклонения для каждого значения баллов
+mean_sd_by_points <- all_data_clean %>% 
+  group_by(points) %>% 
+  summarize(mean_price = mean(price, na.rm = TRUE),
+            sd_price = sd(price, na.rm = TRUE))
+
+# Замена пропущенных значений в колонке price
+all_data_clean_mod <- all_data_clean %>% 
+  left_join(mean_sd_by_points, by = "points") 
+
+all_data_clean_mod <- all_data_clean_mod %>% 
+  mutate(price = ifelse(is.na(price), mean_price + rnorm(1, mean = 0, sd = sd_price), price)) 
+```
+
+Преобразуем данные `Year` в фактор, заменим пропущенные значение - "Non_vintage", а также преобразуем данные `points` в числовой формат:
+
+```{r}
+all_data_clean_mod$Year[is.na(all_data_clean_mod$Year)] <- "Non-vintage"
+all_data_clean_mod$Year <- factor(all_data_clean_mod$Year, exclude = NULL)
+all_data_clean_mod$points <- as.numeric(all_data_clean_mod$points)
+```
+
+Проверям пропущенные данные, еще раз:
+
+```{r}
+# Подсчет пропущенных значений по колонкам
+missing_values_mod <- data.frame(colSums(is.na(all_data_clean_mod)))
+
+colnames(missing_values_mod) <- "missing_value"
+missing_values_mod <- t(missing_values_mod)
+
+# Выводим результат
+missing_values_mod %>%
+  kable(caption = "Количество пропущенных значений по столбцам после обработки")%>%
+  kable_paper(bootstrap_options = "striped", full_width = F)
+
+```
+
+Мы видим, что у нас остались пропущенные значения в designation, region, taster_name. Для дальнейшего решения задач, данная информация пока не потребуется.
+
+##### 1.3.1.2. Выбросы.
+
+Проверим данные на выбросы. Для начала построим boxplot:
+
+```{r}
+# Построение boxplot для переменной price
+ggplot(all_data_clean_mod, aes(y = price)) +
+  geom_boxplot()
+
+# Построение boxplot для переменной points
+ggplot(all_data_clean_mod, aes(y = points)) +
+  geom_boxplot()
+```
+
+Из графиков видно, что выбросы присуствуют и в первом и во втором случае. Давайте посмотрим на данные поближе, для этого отберем значения которые попадают под выбросы:
+
+```{r}
+# Расчет межквартильного размаха для переменной price
+q1 <- quantile(all_data_clean_mod$price, 0.25)
+q3 <- quantile(all_data_clean_mod$price, 0.75)
+iqr <- q3 - q1
+
+# Определение границ выбросов
+lower <- q1 - 1.5 * iqr
+upper <- q3 + 1.5 * iqr
+
+# Поиск выбросов в переменной price
+outliers_price <- all_data_clean_mod$price[all_data_clean_mod$price < lower | all_data_clean_mod$price > upper]
+
+# Расчет межквартильного размаха для переменной points
+q1 <- quantile(all_data_clean_mod$points, 0.25)
+q3 <- quantile(all_data_clean_mod$points, 0.75)
+iqr <- q3 - q1
+
+# Определение границ выбросов
+lower <- q1 - 1.5 * iqr
+upper <- q3 + 1.5 * iqr
+
+# Поиск выбросов в переменной points
+outliers_points <- all_data_clean_mod$points[all_data_clean_mod$points < lower | all_data_clean_mod$points > upper]
+# Поиск выбросов в переменной price
+outliers_price <- all_data_clean_mod$price[all_data_clean_mod$price < lower | all_data_clean_mod$price > upper]
+
+# Вывод данных из таблицы, соответствующих выбросам по переменной price
+outliers_data_price <- subset(all_data_clean_mod, price %in% outliers_price)
+
+
+# Поиск выбросов в переменной points
+outliers_points <- all_data_clean_mod$points[all_data_clean_mod$points < lower | all_data_clean_mod$points > upper]
+
+# Вывод данных из таблицы, соответствующих выбросам по переменной points
+outliers_data_points <- subset(all_data_clean_mod, points %in% outliers_points)
+
+```
+
+```{r}
+# Выводим результат, поместим туда 100 данных для быстрого отображения, при анализе можно вывести все, займет больше времени
+head(outliers_data_price, n = 100) %>%
+  kable(caption = "Количество пропущенных значений по столбцам после обработки")%>%
+  kable_paper(bootstrap_options = "striped", full_width = F)%>%
+  scroll_box(height = "200px")
+
+```
+
+```{r}
+
+# Выводим результат
+outliers_data_points %>%
+  kable(caption = "Количество пропущенных значений по столбцам после обработки")%>%
+  kable_paper(bootstrap_options = "striped", full_width = F)%>%
+  scroll_box(height = "200px")
+```
+
+Эти выбросы представляет собой реальные данные, поэтому оставляем их.
+
+##### 1.3.1.3. Распределение данных
+
+Давайте посмотрим как распределились наши данные:
+
+```{r}
+histogram_price <- ggplot(all_data_clean_mod, aes(x = price)) +
+  geom_histogram(binwidth = 1, fill = "blue", color = "black") +
+  xlab("Price") +
+  ylab("Count") +
+  ggtitle("Distribution of Price")
+
+qq_plot_price <- ggplot(all_data_clean_mod, aes(sample = price)) +
+  stat_qq() +
+  stat_qq_line() +
+  xlab("Theoretical Quantiles") +
+  ylab("Sample Quantiles") +
+  ggtitle("Q-Q Plot for Price")
+
+# Объединение графиков в один рядом
+combined_plot_price <- histogram_price + qq_plot_price
+
+# Отображение объединенного графика
+combined_plot_price
+
+```
+
+```{r}
+histogram_points <- ggplot(all_data_clean_mod, aes(x = points)) +
+  geom_histogram(binwidth = 1, fill = "blue", color = "black") +
+  xlab("Points") +
+  ylab("Count") +
+  ggtitle("Distribution of Points")
+
+qq_plot_points <- ggplot(all_data_clean_mod, aes(sample = points)) +
+  stat_qq() +
+  stat_qq_line() +
+  xlab("Theoretical Quantiles") +
+  ylab("Sample Quantiles") +
+  ggtitle("Q-Q Plot for Points")
+
+# Объединение графиков в один рядом
+combined_plot_points <- histogram_points + qq_plot_points
+
+# Отображение объединенного графика
+combined_plot_points
+
+```
+
+Исходя из графика мы видим, что распределение `price` и `points` не является нормальным. Проведем статические методы исследования номральности распредления. Так как выборка является большой (более 5000), то применить тест Шапиро-Уилка не совсем удобно. Поэтому применим тест Колмогорова-Смирнова с поправкой Лиллиефорса:
+
+```{r}
+# Тест на нормальность распределения переменной points
+lillie.test(all_data_clean$points)
+```
+
+Результаты теста показывают, что p-value значительно меньше 0.05, что говорит о статистически значимом отклонении данных от нормального распределения. Таким образом, на основании данного теста можно сделать вывод, что переменная points не имеет нормальное распределение.
+
+```{r}
+# Тест на нормальность распределения переменной price
+lillie.test(all_data_clean$price)
+
+```
+
+Результаты теста также показывают, что p-value значительно меньше 0.05, что говорит о статистически значимом отклонении данных от нормального распределения. Таким образом, на основании данного теста можно сделать вывод, что переменная price не имеет нормальное распределение.
+
+##### 1.3.1.4. Трансформация данных
+
+Для дальнейшей обработки попробуем применить логарифмическое преобразование для достижения более близкой к нормальности формы распределения. Для этого можно использовать функцию log() для преобразования данных price.
+
+```{r}
+# Трансформация данных price с использованием логарифмического преобразования
+all_data_clean_mod$log_price <- log(all_data_clean_mod$price)
+
+# Трансформация данных points с использованием логарифмического преобразования
+all_data_clean_mod$log_points <- log(all_data_clean_mod$points)
+```
+
+Посмотрим, что получилось:
+
+```{r}
+histogram_price_mod <- ggplot(all_data_clean_mod, aes(x = log_price)) +
+  geom_histogram( fill = "blue", color = "black") +
+  xlab("Price") +
+  ylab("Count") +
+  ggtitle("Distribution of Price")
+
+qq_plot_price_mod <- ggplot(all_data_clean_mod, aes(sample = log_price)) +
+  stat_qq() +
+  stat_qq_line() +
+  xlab("Theoretical Quantiles") +
+  ylab("Sample Quantiles") +
+  ggtitle("Q-Q Plot for Price")
+
+# Объединение графиков в один рядом
+combined_plot_price_mod <- histogram_price_mod + qq_plot_price_mod
+
+# Отображение объединенного графика
+combined_plot_price_mod
+
+```
+
+```{r}
+# Тест на нормальность распределения переменной price
+lillie.test(all_data_clean_mod$log_price)
+```
+
+```{r}
+histogram_points_mod <- ggplot(all_data_clean_mod, aes(x = log_points)) +
+  geom_histogram(binwidth = 0.01, fill = "blue", color = "black") +
+  xlab("Points") +
+  ylab("Count") +
+  ggtitle("Distribution of Points")
+
+qq_plot_points_mod <- ggplot(all_data_clean_mod, aes(sample = log_points)) +
+  stat_qq() +
+  stat_qq_line() +
+  xlab("Theoretical Quantiles") +
+  ylab("Sample Quantiles") +
+  ggtitle("Q-Q Plot for Points")
+
+# Объединение графиков в один рядом
+combined_plot_points_mod <- histogram_points_mod + qq_plot_points_mod
+
+# Отображение объединенного графика
+combined_plot_points_mod
+
+```
+
+```{r}
+# Тест на нормальность распределения переменной price
+lillie.test(all_data_clean_mod$log_points)
+```
+
+По результатам трансформации не удалось добиться нормального распределения данных. На самом деле я пробывал и другие способы 1/х, sqrt, Бокс-Кокс преобразование и преобразование рангов, но ни один из методов не позволил мне получить нормальное распределение. Поэтому для вычисления коэффициента кореляции будем применять метод "kendall".
+
+##### 1.3.1.4. Вычисление среднего, медианы, стандартного отклонения
+
+```{r}
+# Вычисление среднего значения
+mean_points <- mean(all_data_clean_mod$points)
+mean_price <- mean(all_data_clean_mod$price)
+
+# Вычисление медианы
+median_points <- median(all_data_clean_mod$points)
+median_price <- median(all_data_clean_mod$price)
+
+# Вычисление стандартного отклонения
+sd_points <- sd(all_data_clean_mod$points)
+sd_price <- sd(all_data_clean_mod$price)
+
+message('mean_points - ', mean_points, '; mean_price - ', mean_price, '; median_points - ', median_points, '; median_price - ', median_price, '; sd_points -', sd_points, '; sd_price - ', sd_price)
+```
+
+#### 1.3.2. Опишите связь между points и price
+
+Исходя из выше описанного вычислим коэффициент кореляции и уровень значимости, используя метод Кендалла. Коэффициент корреляции Кендалла (Kendall's tau) измеряет степень согласованности в порядке ранговых значений между парами наблюдений. Таким образом это позволит учесть, что вино с одинаковыми балами может иметь различную цен:
+
+```{r}
+# Вычисление коэффициента корреляции Спирмена и p-уровня значимости
+cor_test_result <- cor.test(all_data_clean_mod$points, all_data_clean_mod$price, method = "kendall", exact = FALSE)
+
+# Получение коэффициента корреляции и p-уровня значимости из результата
+cor_value <- cor_test_result$estimate
+p_value <- cor_test_result$p.value
+
+# Вывод коэффициента корреляции и p-уровня значимости
+message('cor_value - ', cor_value, '; p_value - ', p_value)
+```
+
+Коэффициент корреляции Кендалла равен `r cor_value`. Это значение указывает на умеренную связь между рангами баллов и цен вин (в нашем случае между баллами и ценами вин).
+
+p-уровень значимости равен `r p_value`. Это показывает, что нулевая гипотеза о отсутствии связи между рангами баллов и цен отвергается на уровне значимости 0.05 (или любом другом уровне значимости менее 0.05). Таким образом, результат является статистически значимым, и можно сделать вывод о наличии связи между баллами и ценами вин, и эта связь не является случайной.
+
+### 1.4 Визуализация данных
+
+Для этого раздела необходимо использовать паĸет ggplot2. Изображения графиĸов не нужно ĸопировать в xlsx файл. Оставьте воспроизводимый ĸод для визуализации и ответьте на неĸоторые вопросы о вашей визуализации. Исходите из того, что эти графиĸи будут продемонстрированы аудитории людей, знаĸомых с предметной областью. Они сами не занимаются анализом данных, но с неĸоторой периодичностью смотрят подобные отчёты. Графиĸи опрятными и понятными. **Задания:**
+
+1.  Подготовьте два графиĸа, отражающих распределение переменных points и price
+
+    -   Каĸой тип графиĸа вы выбрали для points и почему?
+
+    -   Каĸой тип графиĸа вы выбрали для price и почему?
+
+2.  Подготовьте графиĸ, отражающий связь переменных points и price наиболее наглядным образом.
+
+    -   Опишите тип графиĸа (и дополнительные смысловые элементы), ĸоторый вы выбрали. Почему именно они?
+
+Мы выше уже подготовили данные графики, поэтому просто вызовем их:
+
+```{r}
+# Графики, отражающие распределения points
+combined_plot_points
+```
+
+```{r}
+# Графики, отражающие распределения price
+combined_plot_price
+```
+
+```{r}
+# Графики, отражающие зависимость между points и price
+boxplot_point_price_lim
+```
+
+Для переменной points был выбран гистограммный график (geom_histogram), так как он хорошо отображает распределение значений переменной и позволяет увидеть частоту появления определенных значений. Гистограмма позволяет оценить форму распределения и наличие выбросов. Для дополнительного подверждения, обычно использую QQ_plot
+
+Для переменной price также был выбран гистограммный график, так как он позволяет увидеть распределение ценовых значений и оценить их частоту.
+
+Для отображение связи между price и points я выбрал Boxplot, потому что, у нас каждому баллу может соотвествовать большое количество цен, а Boxplot отображает основные характеристики распределения данных, такие как медиана, квартили и выбросы. Дополнительно мы добавили на график среднее значение. Каждая переменная будет представлена в виде отдельной "коробки" на графике. Таким образом можно более наглядно определить взаимосвязь переменных
